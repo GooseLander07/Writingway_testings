@@ -10,7 +10,7 @@ class SummaryService(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.worker = None  # Initialize single worker
-
+    #Hey, I am making a comment!
     def generate_summary(self, prompt, content, overrides):
         """Generate summary using LLM with a single worker."""
         try:
