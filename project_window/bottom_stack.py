@@ -104,6 +104,13 @@ class BottomStack(QWidget):
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        # Context preview
+        self.context_preview = QTextEdit()
+        self.context_preview.setReadOnly(True)
+        self.context_preview.setPlaceholderText(_("Selected context will appear here..."))
+        self.context_preview.setMaximumHeight(100)
+        layout.addWidget(self.context_preview)
+
         self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
         self.preview_text.setPlaceholderText(_("LLM output preview will appear here..."))
@@ -233,6 +240,10 @@ class BottomStack(QWidget):
             "pov_character": self.pov_character_combo.currentText(),
             "tense": self.tense_combo.currentText()
         }
+
+    def update_context_preview(self, text):
+        """Update the live context preview."""
+        self.context_preview.setPlainText(text)
     
     def preview_prompt(self):
         additional_vars = self.get_additional_vars()
@@ -243,9 +254,9 @@ class BottomStack(QWidget):
         
         dialog = PromptPreviewDialog(
             self.controller,
-            prompt_config=prompt_config, 
-            user_input=action_beats, 
-            additional_vars=additional_vars, 
-            current_scene_text=current_scene_text, 
+            prompt_config=prompt_config,
+            user_input=action_beats,
+            additional_vars=additional_vars,
+            current_scene_text=current_scene_text,
             extra_context=extra_context)
         dialog.exec_()
