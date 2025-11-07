@@ -5,7 +5,6 @@ from compendium.compendium_manager import CompendiumManager
 class ContextPanel(QWidget):
     # Optional signal if ContextPanel itself updates the compendium in the future
     compendium_updated = pyqtSignal(str)  # str is the project_name
-    context_changed = pyqtSignal(str)
     """
     A panel that lets the user choose extra context for the prose prompt.
     It now displays two panels side-by-side:
@@ -66,11 +65,7 @@ class ContextPanel(QWidget):
             act_item = QTreeWidgetItem(
                 self.project_tree, [act.get("name", "Unnamed Act")]
             )
-            act_item.setFlags(act_item.flags() | Qt.ItemIsUserCheckable)
-            act_item.setCheckState(0, Qt.Unchecked)
-            act_item.setData(
-                0, Qt.UserRole, {"type": "act", "data": act}
-            )
+            act_item.setFlags(act_item.flags() & ~Qt.ItemIsUserCheckable)
             self.uuid_map[act["uuid"]] = act_item
 
             # Add Summary item if it exists
@@ -88,8 +83,7 @@ class ContextPanel(QWidget):
                 chapter_item = QTreeWidgetItem(
                     act_item, [chapter.get("name", "Unnamed Chapter")]
                 )
-                chapter_item.setFlags(chapter_item.flags() | Qt.ItemIsUserCheckable)
-                chapter_item.setCheckState(0, Qt.Unchecked)
+                chapter_item.setFlags(chapter_item.flags() & ~Qt.ItemIsUserCheckable)
                 chapter_item.setData(
                     0, Qt.UserRole, {"type": "chapter", "data": chapter}
                 )
@@ -198,64 +192,49 @@ class ContextPanel(QWidget):
 
     def propagate_check_state(self, item, column):
         """
-        Propagate check state changes with full hierarchy support.
-        - Checking/unchecking Act: Recursively check/uncheck all descendants.
-        - Checking/unchecking Chapter: Recursively check/uncheck all descendants (scenes, summary).
-        - Unchecking leaf (scene/summary): If all siblings unchecked, uncheck parent and recurse up.
-        - No partial checks.
+        Propagate check state changes to children and update parent items.
+        This method can cause partial-check states on parent items if some children
+        are checked. If you don't want partial checks at all, you can remove or
+        simplify this logic.
         """
         data = item.data(0, Qt.UserRole)
-        if not data:
-            return
-
-        item_type = data.get("type")
-        state = item.checkState(column)
-        block_signals = item.treeWidget().blockSignals(True)
-
-        if item_type in ["act", "chapter"]:
-            # Full downward propagation for acts and chapters
-            self._propagate_down(item, state)
-        elif item_type in ["scene", "summary"] and state == Qt.Unchecked:
-            # Upward uncheck propagation on leaf uncheck
-            self._propagate_up_on_uncheck(item)
-        elif item_type == "summary" and state == Qt.Checked:
-            # Uncheck sibling scenes when summary checked
+        if data and data.get("type") == "summary" and item.checkState(column) == Qt.Checked:
+            # When summary is checked, uncheck all children of the parent
             parent = item.parent()
             if parent:
                 for i in range(parent.childCount()):
                     child = parent.child(i)
-                    if child != item and child.flags() & Qt.ItemIsUserCheckable and child.data(0, Qt.UserRole).get("type") == "scene":
+                    if child != item and child.flags() & Qt.ItemIsUserCheckable:
                         child.setCheckState(0, Qt.Unchecked)
+        elif item.childCount() > 0:
+            state = item.checkState(column)
+            for i in range(item.childCount()):
+                child = item.child(i)
+                # Only update children if they're user-checkable:
+                if child.flags() & Qt.ItemIsUserCheckable:
+                    child.setCheckState(0, state)
+        self.update_parent_check_state(item)
 
-        item.treeWidget().blockSignals(block_signals)
-        self.context_changed.emit(self.get_selected_context_text())
-
-    def _propagate_down(self, item, state):
-        """Recursively set check state for item and all descendants."""
-        item.setCheckState(0, state)
-        for i in range(item.childCount()):
-            child = item.child(i)
-            if child.flags() & Qt.ItemIsUserCheckable:
-                self._propagate_down(child, state)
-
-    def _propagate_up_on_uncheck(self, item):
-        """Uncheck parent if all children unchecked, recurse up."""
+    def update_parent_check_state(self, item):
         parent = item.parent()
-        if not parent:
+        # If parent is not user-checkable, there's no checkbox to update
+        if not parent or not (parent.flags() & Qt.ItemIsUserCheckable):
             return
-        # Check if all children of parent are unchecked
-        all_unchecked = True
-        for i in range(parent.childCount()):
-            child = parent.child(i)
-            if child.checkState(0) == Qt.Checked:
-                all_unchecked = False
-                break
-        if all_unchecked:
-            self._propagate_down(parent, Qt.Unchecked)
-            # Recurse up
-            self._propagate_up_on_uncheck(parent)
 
-    # Removed update_parent_check_state as upward propagation is not desired
+        checked = sum(
+            1
+            for i in range(parent.childCount())
+            if parent.child(i).checkState(0) == Qt.Checked
+        )
+        if checked == parent.childCount():
+            parent.setCheckState(0, Qt.Checked)
+        elif checked > 0:
+            parent.setCheckState(0, Qt.PartiallyChecked)
+        else:
+            parent.setCheckState(0, Qt.Unchecked)
+
+        # Recursively update further up
+        self.update_parent_check_state(parent)
 
     def get_selected_context_text(self):
         """Collect selected text from both panels, formatted with headers."""
@@ -298,19 +277,15 @@ class ContextPanel(QWidget):
         
         if data and item.checkState(0) == Qt.Checked:
             content_type = data.get("type")
-            if content_type in ["act", "chapter"]:
-                # No direct content for acts/chapters; recurse to children
-                pass
-            else:
-                content = self._load_content(content_type, data.get("data"), hierarchy)
-                
-                if content:
-                    temp_editor.setHtml(content)
-                    content_text = temp_editor.toPlainText()
-                    if content_type == "summary":
-                        texts.append(f"[Summary - {item.parent().text(0)}]:\n{content_text}")
-                    elif content_type == "scene":
-                        texts.append(f"[Scene Content - {item.text(0)}]:\n{content_text}")
+            content = self._load_content(content_type, data.get("data"), hierarchy)
+            
+            if content:
+                temp_editor.setHtml(content)
+                content_text = temp_editor.toPlainText()
+                if content_type == "summary":
+                    texts.append(f"[Summary - {item.parent().text(0)}]:\n{content_text}")
+                elif content_type == "scene":
+                    texts.append(f"[Scene Content - {item.text(0)}]:\n{content_text}")
         
         # Recurse children
         for i in range(item.childCount()):
